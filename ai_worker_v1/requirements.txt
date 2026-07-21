@@ -1,0 +1,37 @@
+# ============================================================
+# OneFrame V56 - Production Requirements
+# Target: Lambda Labs (NVIDIA A10, CUDA 12.x)
+# NOTE: torch/torchvision are NOT here — they come baked into
+#       the PyTorch Docker base image (pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime)
+# ============================================================
+
+# --- Computer Vision ---
+opencv-python-headless==4.10.0.84  # cv2 (headless = no GUI deps, compatible with roboflow 1.3.12)
+ultralytics==8.4.49                 # YOLO checkpoint compatible (C3k2)
+rfdetr==1.3.0                       # RF-DETR base para benchmarks experimentales
+transformers<5                      # RF-DETR 1.3 espera APIs de transformers 4.x
+shapely==2.0.4                      # Polygon / Point geometry for zones
+
+# --- Numerical ---
+numpy==1.26.4                       # Pinned: MoviePy <2.0 breaks with numpy >=2.0
+filterpy==1.4.5                     # Kalman filter for predictive ball tracking
+scipy==1.13.1                       # wavfile.read for low-RAM audio extraction
+
+# --- Audio / Video ---
+# ffmpeg-python is NOT needed: we call ffmpeg as a subprocess directly
+
+# --- Web UI ---
+streamlit==1.35.0                   # Dashboard on port 8501
+pandas==2.2.2                       # DataFrame for tagging export
+openpyxl==3.1.3                     # Excel export (df.to_excel)
+
+# --- Remote Orchestration (control_remoto.py — runs on LOCAL machine, not in Docker) ---
+# fabric==3.2.2
+# rich==13.7.1
+
+# --- Utilities ---
+boto3==1.40.66                      # Cloudflare R2 (S3-compatible) uploads for clips
+
+runpod==1.6.2
+
+supabase
