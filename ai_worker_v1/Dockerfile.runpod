@@ -59,7 +59,7 @@ RUN python -m pip install --no-cache-dir \
 
 COPY ai_worker_v1/src/ ./src/
 COPY ai_worker_v1/scripts/ ./scripts/
-COPY ai_worker_v1/rfdetr_cache/ ./rfdetr_cache/
+RUN mkdir -p /app/rfdetr_cache
 
 ENTRYPOINT []
 CMD ["python", "src/handler.py"]

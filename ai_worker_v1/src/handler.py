@@ -84,6 +84,45 @@ class CriticalJobError(RuntimeError):
     """Error que debe marcar el job de RunPod como FAILED."""
 
 
+def ensure_rfdetr_base_checkpoint() -> str:
+    """Materialize the pinned RF-DETR artifact from configured R2."""
+    import hashlib
+    import tempfile
+
+    target = "/app/rfdetr_cache/rf-detr-base.pth"
+    expected = os.getenv("RFDETR_BASE_SHA256")
+    object_key = os.getenv("RFDETR_BASE_OBJECT_KEY")
+    if not expected or not object_key:
+        raise CriticalJobError("RFDETR_BASE_OBJECT_KEY and RFDETR_BASE_SHA256 are required")
+
+    def digest(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    if os.path.isfile(target) and digest(target) == expected:
+        return target
+    cloud = CloudManager()
+    client = cloud.r2_read_client
+    if client is None:
+        raise CriticalJobError("R2 read client unavailable for RF-DETR artifact")
+    bucket = cloud.r2_read_bucket
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="rf-detr-", suffix=".pth", dir="/tmp")
+    os.close(fd)
+    try:
+        client.download_file(bucket, object_key, tmp)
+        if digest(tmp) != expected:
+            raise CriticalJobError("RF-DETR artifact SHA256 mismatch")
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return target
+
+
 def normalize_video_url(url: str) -> str:
     """
     Convierte cualquier formato de URL de Google Drive al formato de descarga directa.
@@ -2059,6 +2098,7 @@ def handle_pe0a4r_gpu_preannotation(
 ) -> Dict[str, Any]:
     """Shadow-only GPU preannotation for PE-0A4R supplemental ball review."""
     started_at = time.time()
+    ensure_rfdetr_base_checkpoint()
     local_video_path = download_video(link_video, video_path)
     output_dir = os.path.join("/tmp", "pe0a4r_gpu_preannotation", match_id)
     if os.path.exists(output_dir):
