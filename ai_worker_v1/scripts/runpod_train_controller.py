@@ -35,7 +35,7 @@ def inputs(c,run_id):
     for key in (ds,ck,manifest): s.head_object(Bucket=bucket,Key=key)
     outbucket=os.environ.get('R2_OUTPUT_BUCKET',bucket); prefix=c['output_prefix'].replace('{run_id}',run_id)
     urls={'DATASET_GET_URL':s.generate_presigned_url('get_object',Params={'Bucket':bucket,'Key':ds},ExpiresIn=14400),'CHECKPOINT_GET_URL':s.generate_presigned_url('get_object',Params={'Bucket':bucket,'Key':ck},ExpiresIn=14400),'OUTPUT_PREFIX':prefix}
-    names={'heartbeat.json':'HEARTBEAT_PUT_URL','result.json':'RESULT_PUT_URL','best.pth':'BEST_PUT_URL','last.pth':'LAST_PUT_URL','metrics.json':'METRICS_PUT_URL','resolved_config.json':'CONFIG_PUT_URL','train.log':'LOG_PUT_URL'}
+    names={'heartbeat.json':'HEARTBEAT_PUT_URL','result.json':'RESULT_PUT_URL','best.pth':'BEST_PUT_URL','last.pth':'LAST_PUT_URL','metrics.json':'METRICS_PUT_URL','resolved_config.json':'CONFIG_PUT_URL','training_summary.json':'TRAINING_SUMMARY_PUT_URL','train.log':'LOG_PUT_URL'}
     for name,var in names.items(): urls[var]=s.generate_presigned_url('put_object',Params={'Bucket':outbucket,'Key':prefix+name},ExpiresIn=14400)
     return urls,prefix
 
@@ -54,19 +54,21 @@ def delete_verified(pid):
     raise RuntimeError('Pod deletion could not be verified with 404')
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument('--dry-run',action='store_true'); p.add_argument('--execute',action='store_true'); p.add_argument('--cleanup-only',action='store_true'); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument('--dry-run',action='store_true'); p.add_argument('--execute',action='store_true'); p.add_argument('--cleanup-only',action='store_true'); p.add_argument('--job-mode',choices=('train','evaluate'),default='train'); p.add_argument('--source-run-id'); p.add_argument('--eval-checkpoint-key'); p.add_argument('--eval-checkpoint-sha256'); p.add_argument('--eval-split',choices=('valid','test'),default='valid'); a=p.parse_args()
     if sum(bool(x) for x in (a.dry_run,a.execute,a.cleanup_only))!=1:p.error('choose exactly one mode')
     load_env()
     if a.cleanup_only:
         if ACTIVE.exists(): delete_verified(json.loads(ACTIVE.read_text())['pod_id']); ACTIVE.unlink()
         return 0
-    c=json.loads(CONTRACT.read_text()); run='ball-v0-t3-'+time.strftime('%Y%m%dT%H%M%SZ')+'-'+os.getenv('GITHUB_SHA','local')[:7]; urls,prefix=inputs(c,run)
+    c=json.loads(CONTRACT.read_text()); run=('ball-v0-t3-' if a.job_mode=='train' else 'ball-eval-')+time.strftime('%Y%m%dT%H%M%SZ')+'-'+os.getenv('GITHUB_SHA','local')[:7]; urls,prefix=inputs(c,run)
+    if a.job_mode=='evaluate':
+        s=r2(); b=os.environ.get('R2_INPUT_BUCKET','one-frame'); key=a.eval_checkpoint_key or ''; s.head_object(Bucket=b,Key=key); urls['EVAL_CHECKPOINT_GET_URL']=s.generate_presigned_url('get_object',Params={'Bucket':b,'Key':key},ExpiresIn=14400); urls['EVAL_CHECKPOINT_SHA256']=a.eval_checkpoint_sha256; prefix=c['output_prefix'].replace('{run_id}',a.source_run_id or run)+'validation-recovery-'+time.strftime('%Y%m%dT%H%M%SZ')+'/'
     if a.dry_run: print(json.dumps({'dry_run':True,'run_id':run,'output_prefix':prefix,'pods_created':0,'presigned_urls_generated':True,'max_hourly_cost':float(os.getenv('MAX_HOURLY_COST','0.80'))})); return 0
     pods=api('GET','/v1/pods');
     if not isinstance(pods,list): raise RuntimeError('GET /v1/pods did not return list')
     if any(str(x.get('name','')).startswith('oneframe-train-') and x.get('desiredStatus') not in ('EXITED','TERMINATED') for x in pods): raise RuntimeError('active oneframe-train Pod exists')
-    image=os.environ.get('TRAINING_IMAGE','oneframecontent/oneframe-ai-worker-v1:train-'+os.getenv('GITHUB_SHA','local')); env=dict(urls,ONEFRAME_RUN_ID=run,DATASET_ARCHIVE_SHA256=c['dataset']['archive_sha256'],CHECKPOINT_SHA256=c['checkpoint']['sha256'])
-    payload={'name':'oneframe-train-'+run,'imageName':image,'computeType':'GPU','cloudType':'SECURE','interruptible':False,'gpuCount':1,'gpuTypeIds':GPU_PRIORITY,'gpuTypePriority':'availability','containerDiskInGb':80,'volumeInGb':0,'ports':[],'dockerStartCmd':['python','-u','/workspace/oneframe_job/runner.py'],'env':env}
+    image=os.environ.get('TRAINING_IMAGE','oneframecontent/oneframe-ai-worker-v1:train-'+os.getenv('GITHUB_SHA','local')); env=dict(urls,ONEFRAME_RUN_ID=run,ONEFRAME_JOB_MODE=a.job_mode,EVAL_SPLIT=a.eval_split,DATASET_ARCHIVE_SHA256=c['dataset']['archive_sha256'],CHECKPOINT_SHA256=c['checkpoint']['sha256'])
+    payload={'name':('oneframe-train-' if a.job_mode=='train' else 'oneframe-eval-')+run,'imageName':image,'computeType':'GPU','cloudType':'SECURE','interruptible':False,'gpuCount':1,'gpuTypeIds':GPU_PRIORITY,'gpuTypePriority':'availability','containerDiskInGb':80,'volumeInGb':0,'ports':[],'dockerStartCmd':['python','-u','/workspace/oneframe_job/runner.py'],'env':env}
     pod=api('POST','/v1/pods',payload); pid=pod.get('id') or pod.get('podId'); cost=float(pod.get('costPerHr',pod.get('adjustedCostPerHr',0)) or 0)
     ACTIVE.parent.mkdir(parents=True,exist_ok=True); ACTIVE.write_text(json.dumps({'pod_id':pid,'run_id':run}))
     try:
@@ -79,7 +81,7 @@ def main():
             except Exception: result=None
             if result is not None:
                 if result.get('status')!='SUCCESS' or result.get('exit_code')!=0: raise RuntimeError('training FAILED: '+str(result.get('first_error')))
-                for key in ('best.pth','metrics.json','train.log'): s.head_object(Bucket=outbucket,Key=prefix+key)
+                for key in ('best.pth','train.log','training_summary.json','resolved_config.json'): s.head_object(Bucket=outbucket,Key=prefix+key)
                 print(json.dumps({'training':'SUCCESS','output_prefix':prefix})); return 0
             if st.get('desiredStatus') in ('EXITED','TERMINATED'): raise RuntimeError('Pod terminated without successful result.json')
             time.sleep(30)

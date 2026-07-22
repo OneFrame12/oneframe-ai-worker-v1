@@ -42,6 +42,11 @@ def main() -> int:
         ds=JOB/'input'/'dataset.tar.zst'; ck=JOB/'input'/'rf-detr-base.pth'; url_get(os.environ['DATASET_GET_URL'],ds); url_get(os.environ['CHECKPOINT_GET_URL'],ck)
         if sha256(ds)!=os.environ['DATASET_ARCHIVE_SHA256']: raise RuntimeError('dataset archive SHA256 mismatch')
         if sha256(ck)!=os.environ['CHECKPOINT_SHA256']: raise RuntimeError('checkpoint SHA256 mismatch')
+        mode=os.getenv('ONEFRAME_JOB_MODE','train')
+        eval_ck=JOB/'input'/'best.pth'
+        if mode=='evaluate':
+            url_get(os.environ['EVAL_CHECKPOINT_GET_URL'],eval_ck)
+            if sha256(eval_ck)!=os.environ['EVAL_CHECKPOINT_SHA256']: raise RuntimeError('evaluation checkpoint SHA256 mismatch')
         (ROOT/'checkpoints').mkdir(parents=True,exist_ok=True); shutil.copy2(ck,ROOT/'checkpoints'/'rf-detr-base.pth')
         # T3's canonical script resolves /workspace/oneframe; expose the packaged
         # tree there without changing the training code or its import contract.
@@ -52,7 +57,11 @@ def main() -> int:
         tar=subprocess.run(['tar','--no-same-owner','-xf',str(JOB/'input'/'dataset.tar'),'-C',str(ROOT)],capture_output=True,text=True)
         if tar.returncode: raise RuntimeError(tar.stderr[-500:])
         hb=threading.Thread(target=heartbeat,args=(state,),daemon=True); hb.start()
-        cmd=[sys.executable,'scripts/run_t3_remote_training.py']; proc=subprocess.Popen(cmd,cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+        if mode=='evaluate':
+            dataset_dir=ROOT/'OneFrame_Ball_v0'
+            cmd=[sys.executable,'scripts/run_t3_remote_training.py','--mode','evaluate','--eval-checkpoint',str(eval_ck),'--dataset-root',str(dataset_dir),'--split',os.getenv('EVAL_SPLIT','valid'),'--output-dir',str(OUT/'evaluation')]
+        else: cmd=[sys.executable,'scripts/run_t3_remote_training.py']
+        proc=subprocess.Popen(cmd,cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
         with log.open('w',encoding='utf-8') as lf:
             for line in proc.stdout:
                 state['last']=line.rstrip(); lf.write(line); lf.flush(); print(line,end='',flush=True)
@@ -64,8 +73,8 @@ def main() -> int:
         state['stop'].set();
         if not log.exists(): log.write_text((first_error or '')+'\n',encoding='utf-8')
         artifacts={}
-        candidates=list(ROOT.rglob('best.pth'))+list(ROOT.rglob('last.pth'))+list(ROOT.rglob('*metrics*.json'))+list(ROOT.rglob('*config*.json'))
-        urls={'best.pth':'BEST_PUT_URL','last.pth':'LAST_PUT_URL','metrics.json':'METRICS_PUT_URL','resolved_config.json':'CONFIG_PUT_URL','train.log':'LOG_PUT_URL'}
+        candidates=list(ROOT.rglob('best.pth'))+list(ROOT.rglob('last.pth'))+list(ROOT.rglob('*metrics*.json'))+list(ROOT.rglob('*config*.json'))+list(ROOT.rglob('training_summary.json'))
+        urls={'best.pth':'BEST_PUT_URL','last.pth':'LAST_PUT_URL','metrics.json':'METRICS_PUT_URL','resolved_config.json':'CONFIG_PUT_URL','training_summary.json':'TRAINING_SUMMARY_PUT_URL','train.log':'LOG_PUT_URL'}
         for p in candidates+[log]:
             key=p.name
             if key in urls:
@@ -74,7 +83,8 @@ def main() -> int:
         log_text=log.read_text(errors='replace')
         training_completed=('Training time ' in log_text or 'Early stopping triggered' in log_text)
         finalization_status='SUCCESS' if artifacts.get('best.pth') else 'FAILED'
-        result={'status':'SUCCESS' if rc==0 and finalization_status=='SUCCESS' else 'FAILED','failure_stage':None if rc==0 else ('ARTIFACT_FINALIZATION' if training_completed else 'TRAINING'),'training_exit_code':0 if training_completed else rc,'finalization_status':finalization_status,'exit_code':rc,'run_id':run_id,'started_at':datetime.fromtimestamp(started,timezone.utc).isoformat(),'ended_at':datetime.now(timezone.utc).isoformat(),'elapsed_seconds':int(time.time()-started),'gpu':os.getenv('GPU_NAME'),'artifact_sha256':artifacts,'first_error':first_error}
+        required = all(k in artifacts for k in ('best.pth','train.log','training_summary.json','resolved_config.json'))
+        result={'status':'SUCCESS' if rc==0 and required else 'FAILED','job_type':'TRAINING','failure_stage':None if rc==0 else ('ARTIFACT_FINALIZATION' if training_completed else 'TRAINING'),'training_exit_code':0 if training_completed else rc,'finalization_status':'SUCCESS' if required else 'FAILED','exit_code':rc,'run_id':run_id,'started_at':datetime.fromtimestamp(started,timezone.utc).isoformat(),'ended_at':datetime.now(timezone.utc).isoformat(),'elapsed_seconds':int(time.time()-started),'gpu':os.getenv('GPU_NAME'),'artifact_sha256':artifacts,'first_error':first_error}
         rp=OUT/'result.json'; rp.write_text(json.dumps(result,indent=2),encoding='utf-8')
         try: url_put(os.getenv('RESULT_PUT_URL',''),rp)
         except Exception: pass

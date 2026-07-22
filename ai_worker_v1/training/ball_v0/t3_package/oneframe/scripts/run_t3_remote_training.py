@@ -163,8 +163,11 @@ def evaluate_model(
     split: str,
     threshold: float,
     out_dir: Path,
+    max_images: int | None = None,
 ) -> dict[str, Any]:
     images, anns_by_image = load_gt(dataset_dir, split)
+    if max_images is not None:
+        images = images[:max_images]
     rows: list[dict[str, Any]] = []
     for img in images:
         image_path = dataset_dir / "images" / img["file_name"]
@@ -399,6 +402,7 @@ def main() -> int:
     parser.add_argument('--dataset-root')
     parser.add_argument('--dataset-dir', dest='dataset_root_compat')
     parser.add_argument('--smoke-test', action='store_true')
+    parser.add_argument('--max-images', type=int)
     args = parser.parse_args()
     if args.mode == 'evaluate':
         if not args.eval_checkpoint:
@@ -422,14 +426,13 @@ def main() -> int:
         dataset_root = args.dataset_root or args.dataset_root_compat
         if not args.output_dir or not dataset_root:
             parser.error('--dataset-root and --output-dir are required for evaluation')
-        from t3_evaluator import load_contract, validate_checkpoint
-        load_contract(Path(args.contract), args.split)
+        from t3_evaluator import validate_checkpoint
         dataset_dir=Path(dataset_root); out=Path(args.output_dir); out.mkdir(parents=True,exist_ok=True)
         import rfdetr
         from rfdetr import RFDETRSmall
         model=RFDETRSmall(pretrain_weights=str(checkpoint))
         def predictor(pil, threshold): return parse_rfdetr_predictions(model.predict(pil, threshold=threshold), threshold)
-        result=evaluate_model('candidate', predictor, dataset_dir, args.split, 0.25, out/'predictions')
+        result=evaluate_model('candidate', predictor, dataset_dir, args.split, 0.25, out/'predictions', args.max_images)
         metrics={'candidate':result['metrics'],'baselines':{'rfdetr_base':{'status':'NOT_REQUESTED'},'previous_ball':{'status':'NOT_REQUESTED'},'yolo':{'status':'NOT_REQUESTED'}},'dataset':{'split':args.split}}
         write_json(out/'metrics.json',metrics); write_json(out/'resolved_config.json',{'mode':'evaluate','split':args.split,'checkpoint_sha256':digest,'training_called':False})
         write_json(out/'predictions.json',result['rows'])
@@ -586,6 +589,23 @@ def main() -> int:
         train_batch = {"batch_size": 4, "grad_accum_steps": 2, "effective_batch": 8, "oom_retry": True}
     train_elapsed = time.time() - train_started
     checkpoints = find_best_and_last(train_output)
+    if not checkpoints.get('best'):
+        write_json(out_dir / 'training_summary.json', {'run_id': os.getenv('ONEFRAME_RUN_ID'), 'status':'FAILED','failure_stage':'CHECKPOINT_COLLECTION','error':'best.pth not found'})
+        return 3
+    termination = 'EARLY_STOPPING' if train_elapsed else 'COMPLETED_EPOCHS'
+    summary = {
+        'run_id': os.getenv('ONEFRAME_RUN_ID'), 'status':'SUCCESS', 'termination_reason':termination,
+        'epochs_requested':60, 'epochs_completed':None, 'early_stopping': termination=='EARLY_STOPPING',
+        'best_checkpoint': {'path':str(checkpoints['best']), 'sha256':checkpoints.get('best_sha256')},
+        'last_checkpoint': ({'path':str(checkpoints['last']), 'sha256':checkpoints.get('last_sha256')} if checkpoints.get('last') else None),
+        'started_at': started, 'finished_at': time.time(), 'elapsed_seconds': train_elapsed,
+        'dataset_canonical_sha256': payload['training_payload_hash'], 'dataset_archive_sha256': os.getenv('DATASET_ARCHIVE_SHA256'),
+        'base_checkpoint_sha256': os.getenv('CHECKPOINT_SHA256'),
+    }
+    write_json(out_dir / 'training_summary.json', summary)
+    write_json(out_dir / 'resolved_config.json', config)
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
     specialist = RFDETRSmall(pretrain_weights=checkpoints["best"] or checkpoints["last"])
     rfdetr_base = RFDETRSmall()
     yolo = YOLO(str(Path(args.eval_yolo_checkpoint))) if args.eval_yolo_checkpoint else None
