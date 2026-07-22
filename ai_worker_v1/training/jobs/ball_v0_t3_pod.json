@@ -1,0 +1,11 @@
+{
+  "schema_version":"ball-v0-t3-pod.v1",
+  "model_family":"RFDETRSmall",
+  "dataset":{"path":"ai_worker_v1/datasets/OneFrame_Ball_v0","canonical_sha256":"cc8d2b5dd07891928a0f83dab8af4899b75ba7ef6aec12de351c015da5a83410","r2_key":"datasets/ball/v0/cc8d2b5dd07891928a0f83dab8af4899b75ba7ef6aec12de351c015da5a83410/dataset.tar.zst","archive_sha256":"f432b98e2440cfddfc6d0951414de29417bd0427dd3e3ffb87659ff4a75650c1","archive_bytes":29706270,"file_count":412},
+  "checkpoint":{"r2_key":"models/rfdetr/base/d8f70210e425a4a4234d547737f57500bcc4ac24a333b99e33d9d5a371e0b80f/rf-detr-base.pth","sha256":"d8f70210e425a4a4234d547737f57500bcc4ac24a333b99e33d9d5a371e0b80f"},
+  "image":"oneframecontent/oneframe-ai-worker-v1:sha-7b36b02b3c40ca4439c9fad296cb70ac2da4cf09",
+  "script":"scripts/run_t3_remote_training.py","command":"python scripts/run_t3_remote_training.py",
+  "training":{"epochs":60,"batch_size":8,"seed":1337,"early_stopping_patience":12},
+  "max_runtime_minutes":120,"max_hourly_cost":0.8,"output_prefix":"training/ball/v0/rfdetr_s/{run_id}/",
+  "expected_artifacts":["best.pth","last.pth","metrics.json","resolved_config.json","train.log","result.json"]
+}

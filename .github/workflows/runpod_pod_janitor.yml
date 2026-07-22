@@ -1,0 +1,10 @@
+name: runpod-pod-janitor
+on:
+  workflow_dispatch:
+  schedule: [{cron: '*/15 * * * *'}]
+jobs:
+  janitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 ai_worker_v1/scripts/runpod_pod_janitor.py
