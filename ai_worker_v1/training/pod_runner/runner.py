@@ -71,7 +71,10 @@ def main() -> int:
             if key in urls:
                 try: url_put(os.getenv(urls[key],''),p); artifacts[key]=sha256(p)
                 except Exception as exc: first_error=first_error or str(exc); rc=rc or 1
-        result={'status':'SUCCESS' if rc==0 else 'FAILED','exit_code':rc,'run_id':run_id,'started_at':datetime.fromtimestamp(started,timezone.utc).isoformat(),'ended_at':datetime.now(timezone.utc).isoformat(),'elapsed_seconds':int(time.time()-started),'gpu':os.getenv('GPU_NAME'),'artifact_sha256':artifacts,'first_error':first_error}
+        log_text=log.read_text(errors='replace')
+        training_completed=('Training time ' in log_text or 'Early stopping triggered' in log_text)
+        finalization_status='SUCCESS' if artifacts.get('best.pth') else 'FAILED'
+        result={'status':'SUCCESS' if rc==0 and finalization_status=='SUCCESS' else 'FAILED','failure_stage':None if rc==0 else ('ARTIFACT_FINALIZATION' if training_completed else 'TRAINING'),'training_exit_code':0 if training_completed else rc,'finalization_status':finalization_status,'exit_code':rc,'run_id':run_id,'started_at':datetime.fromtimestamp(started,timezone.utc).isoformat(),'ended_at':datetime.now(timezone.utc).isoformat(),'elapsed_seconds':int(time.time()-started),'gpu':os.getenv('GPU_NAME'),'artifact_sha256':artifacts,'first_error':first_error}
         rp=OUT/'result.json'; rp.write_text(json.dumps(result,indent=2),encoding='utf-8')
         try: url_put(os.getenv('RESULT_PUT_URL',''),rp)
         except Exception: pass
