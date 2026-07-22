@@ -43,6 +43,10 @@ def main() -> int:
         if sha256(ds)!=os.environ['DATASET_ARCHIVE_SHA256']: raise RuntimeError('dataset archive SHA256 mismatch')
         if sha256(ck)!=os.environ['CHECKPOINT_SHA256']: raise RuntimeError('checkpoint SHA256 mismatch')
         (ROOT/'checkpoints').mkdir(parents=True,exist_ok=True); shutil.copy2(ck,ROOT/'checkpoints'/'rf-detr-base.pth')
+        # T3's canonical script resolves /workspace/oneframe; expose the packaged
+        # tree there without changing the training code or its import contract.
+        canonical=Path('/workspace/oneframe')
+        if not canonical.exists(): canonical.symlink_to(ROOT, target_is_directory=True)
         zstd=subprocess.run(['zstd','-d','-f',str(ds),'-o',str(JOB/'input'/'dataset.tar')],capture_output=True,text=True)
         if zstd.returncode: raise RuntimeError(zstd.stderr[-500:])
         tar=subprocess.run(['tar','--no-same-owner','-xf',str(JOB/'input'/'dataset.tar'),'-C',str(ROOT)],capture_output=True,text=True)
