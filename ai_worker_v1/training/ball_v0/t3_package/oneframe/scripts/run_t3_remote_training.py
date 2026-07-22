@@ -388,6 +388,30 @@ def find_best_and_last(output_dir: Path) -> dict[str, Any]:
 
 
 def main() -> int:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=('train','evaluate'), default='train')
+    parser.add_argument('--eval-checkpoint')
+    parser.add_argument('--eval-yolo-checkpoint')
+    parser.add_argument('--output-dir')
+    parser.add_argument('--smoke-test', action='store_true')
+    args = parser.parse_args()
+    if args.mode == 'evaluate':
+        if not args.eval_checkpoint:
+            parser.error('--eval-checkpoint is required in evaluate mode')
+        checkpoint = Path(args.eval_checkpoint)
+        if not checkpoint.is_file():
+            raise FileNotFoundError(str(checkpoint))
+        import hashlib
+        digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        import torch
+        obj = torch.load(checkpoint, map_location='cpu', weights_only=False)
+        if not isinstance(obj, dict) or 'model' not in obj:
+            raise ValueError('evaluation checkpoint lacks model weights')
+        if args.smoke_test:
+            print(json.dumps({'evaluation_only': True, 'checkpoint_valid': True, 'training_called': False, 'checkpoint_sha256': digest}))
+            return 0
+        raise RuntimeError('evaluation mode requires the frozen evaluation dataset and explicit evaluator configuration')
     started = time.time()
     root = Path("/workspace/oneframe")
     dataset_dir = root / "OneFrame_Ball_v0"
@@ -540,7 +564,9 @@ def main() -> int:
     checkpoints = find_best_and_last(train_output)
     specialist = RFDETRSmall(pretrain_weights=checkpoints["best"] or checkpoints["last"])
     rfdetr_base = RFDETRSmall()
-    yolo = YOLO(str(root / "checkpoints" / "oneframe_v3_best.pt"))
+    if not args.eval_yolo_checkpoint:
+        raise RuntimeError('--eval-yolo-checkpoint is required for full evaluation')
+    yolo = YOLO(str(Path(args.eval_yolo_checkpoint)))
 
     def rfdetr_base_predictor(pil: Image.Image, threshold: float) -> list[dict[str, Any]]:
         return parse_rfdetr_predictions(rfdetr_base.predict(pil, threshold=threshold), threshold)
